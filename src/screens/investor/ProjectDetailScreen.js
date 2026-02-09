@@ -60,7 +60,12 @@ export default function ProjectDetailScreen({ navigation, route }) {
 
     // NEW: Service-specific fields (person & place)
     const [paidToPerson, setPaidToPerson] = useState('');
+
     const [paidToPlace, setPaidToPlace] = useState('');
+
+    // NEW: Investment Type State
+    const [investmentType, setInvestmentType] = useState('self'); // 'self' or 'other'
+    const [selectedFunder, setSelectedFunder] = useState(null);
 
     // NEW: Product-specific fields (material type)
     const [materialType, setMaterialType] = useState('');
@@ -249,6 +254,12 @@ export default function ProjectDetailScreen({ navigation, route }) {
             return;
         }
 
+        // Validate Funder if Investment Type is Other
+        if (investmentType === 'other' && !selectedFunder) {
+            Alert.alert('Select Funder', 'Please select which member funded this spending');
+            return;
+        }
+
         // Create spending with approval tracking and new fields
         const newSpending = {
             id: Date.now().toString(),
@@ -272,6 +283,9 @@ export default function ProjectDetailScreen({ navigation, route }) {
             },
             rejections: {},
             totalMembers: projectMemberIds.length,
+            // NEW: Track who funded it
+            fundedBy: investmentType === 'self' ? currentUser.id : selectedFunder,
+            investmentType: investmentType,
         };
 
         // Check if all other members have approved (if only 1 member, auto-approve)
@@ -296,7 +310,7 @@ export default function ProjectDetailScreen({ navigation, route }) {
             );
             Alert.alert(
                 'Pending Approval',
-                `Spending of ₹${parsedAmount.toLocaleString()} has been submitted for approval from all project members.`
+                `Spending of ₹${parsedAmount.toLocaleString()} has been submitted for approval from all active project members.`
             );
         }
 
@@ -311,6 +325,8 @@ export default function ProjectDetailScreen({ navigation, route }) {
         setMaterialType('');
         setSelectedLedgerId('');
         setSelectedSubLedger('');
+        setInvestmentType('self');
+        setSelectedFunder(null);
     };
 
     // Show instant feedback
@@ -326,8 +342,16 @@ export default function ProjectDetailScreen({ navigation, route }) {
             [currentUser.id]: { status: 'approved', at: new Date().toISOString(), name: currentUser.name }
         };
 
+        // Check if all ACTIVE members have approved
+        // Get list of active members
+        const activeMembers = projectMemberIds.filter(id => {
+            const role = project.investorRoles?.[id] || 'active';
+            return role === 'active';
+        });
+
         const approvedCount = Object.values(updatedApprovals).filter(a => a.status === 'approved').length;
-        const allApproved = approvedCount >= projectMemberIds.length;
+        // Total needed is count of active members
+        const allApproved = approvedCount >= activeMembers.length;
 
         // Instant UI update
         const updatedPending = pendingSpendings.map(s =>
@@ -626,9 +650,21 @@ export default function ProjectDetailScreen({ navigation, route }) {
                     />
                 </View>
                 <View style={styles.spendingContent}>
-                    <Text style={styles.spendingDescription} numberOfLines={1}>{spending.description}</Text>
                     <Text style={styles.spendingMeta}>
-                        {ledgers.find(l => l.id === spending.ledgerId)?.name || userAccounts[spending.addedBy]?.name || spending.category} • {spending.date}
+                        {(() => {
+                            const isSelfFunded = !spending.fundedBy || spending.fundedBy === spending.addedBy;
+                            const funderName = userAccounts[spending.fundedBy]?.name || 'Unknown';
+                            // "if the user select the self account button the funded by shouldnt display it should just display the user name"
+                            const funderDisplay = isSelfFunded
+                                ? (userAccounts[spending.addedBy]?.name || 'You')
+                                : `Funded by ${funderName}`;
+
+                            // Combine with other meta info
+                            const ledgerName = ledgers.find(l => l.id === spending.ledgerId)?.name;
+                            const prefix = ledgerName || spending.category;
+
+                            return `${prefix} • ${funderDisplay} • ${spending.date}`;
+                        })()}
                     </Text>
                 </View>
 
@@ -705,18 +741,21 @@ export default function ProjectDetailScreen({ navigation, route }) {
                 <View style={styles.approvalProgressSection}>
                     <View style={styles.approvalProgressHeader}>
                         <Text style={styles.approvalProgressTitle}>Approval Progress</Text>
-                        <Text style={styles.approvalProgressCount}>{approvedCount} of {projectMemberIds.length}</Text>
+
+                        <Text style={styles.approvalProgressCount}>
+                            {approvedCount} of {Object.values(project.investorRoles || {}).filter(r => r === 'active').length || projectMemberIds.length}
+                        </Text>
                     </View>
                     <View style={styles.approvalProgressBar}>
-                        <View style={[styles.approvalProgressFill, { width: `${(approvedCount / projectMemberIds.length) * 100}% ` }]} />
+                        <View style={[styles.approvalProgressFill, { width: `${(approvedCount / (Object.values(project.investorRoles || {}).filter(r => r === 'active').length || projectMemberIds.length)) * 100}% ` }]} />
                     </View>
                     {approvedByNames.length > 0 && (
                         <Text style={styles.approvedByText}>Approved by: {approvedByNames.join(', ')}</Text>
                     )}
                 </View>
 
-                {/* Action Buttons */}
-                {!myApproval && !isMySpending && (
+                {/* Action Buttons - Only for Active Members */}
+                {!myApproval && !isMySpending && !isPassiveViewer && (
                     <View style={styles.pendingActionButtons}>
                         <TouchableOpacity
                             style={styles.rejectActionBtn}
@@ -749,8 +788,17 @@ export default function ProjectDetailScreen({ navigation, route }) {
                         <Text style={[styles.yourStatusText, { color: '#6366F1' }]}>You submitted this</Text>
                     </View>
                 )}
+
+                {/* Passive Member View - No Actions */}
+                {isPassiveViewer && !myApproval && !isMySpending && (
+                    <View style={styles.yourStatusBadge}>
+                        <MaterialCommunityIcons name="eye-off-outline" size={18} color={theme.colors.textSecondary} />
+                        <Text style={[styles.yourStatusText, { color: theme.colors.textSecondary }]}>View Only (Cannot Approve)</Text>
+                    </View>
+                )}
             </View>
         );
+
     };
 
     // Render rejected spending item
@@ -1005,6 +1053,58 @@ export default function ProjectDetailScreen({ navigation, route }) {
                                 />
                             </View>
 
+                            {/* Investment Type Selection */}
+                            <Text style={styles.fieldLabel}>💳 Investment Type</Text>
+                            <View style={styles.investmentTypeRow}>
+                                <TouchableOpacity
+                                    style={[styles.typeButton, investmentType === 'self' && styles.typeButtonActive]}
+                                    onPress={() => {
+                                        setInvestmentType('self');
+                                        setSelectedFunder(null);
+                                    }}
+                                >
+                                    <Text style={[styles.typeButtonText, investmentType === 'self' && styles.typeButtonTextActive]}>Self Account</Text>
+                                </TouchableOpacity>
+
+                                <TouchableOpacity
+                                    style={[styles.typeButton, investmentType === 'other' && styles.typeButtonActive]}
+                                    onPress={() => setInvestmentType('other')}
+                                >
+                                    <Text style={[styles.typeButtonText, investmentType === 'other' && styles.typeButtonTextActive]}>Funded By...</Text>
+                                </TouchableOpacity>
+                            </View>
+
+                            {/* Dynamic Member List for 'Funded By' */}
+                            {investmentType === 'other' && (
+                                <View style={{ marginBottom: 16 }}>
+                                    <Text style={[styles.fieldLabel, { fontSize: 13, marginBottom: 8 }]}>Select Funder:</Text>
+                                    <ScrollView
+                                        horizontal
+                                        showsHorizontalScrollIndicator={false}
+                                        style={styles.funderList}
+                                        contentContainerStyle={{ paddingRight: 20 }}
+                                    >
+                                        {projectMembers.filter(m => m.id !== currentUser.id).map(member => {
+                                            const uName = userAccounts[member.id]?.name || member.name;
+                                            return (
+                                                <TouchableOpacity
+                                                    key={member.id}
+                                                    style={[styles.funderChip, selectedFunder === member.id && styles.funderChipActive]}
+                                                    onPress={() => setSelectedFunder(member.id)}
+                                                >
+                                                    <View style={styles.funderAvatarSmall}>
+                                                        <Text style={styles.funderAvatarText}>{uName.charAt(0)}</Text>
+                                                    </View>
+                                                    <Text style={[styles.funderText, selectedFunder === member.id && styles.funderTextActive]}>
+                                                        {uName.split(' ')[0]}
+                                                    </Text>
+                                                </TouchableOpacity>
+                                            );
+                                        })}
+                                    </ScrollView>
+                                </View>
+                            )}
+
                             {/* Category Selection */}
                             <Text style={styles.fieldLabel}>🏷️ Category</Text>
                             <View style={styles.categoryRow}>
@@ -1193,9 +1293,33 @@ export default function ProjectDetailScreen({ navigation, route }) {
                                                     <Text style={styles.contributorName} numberOfLines={1}>
                                                         {isCurrentUser ? 'Self Account' : item.memberUser.name}
                                                     </Text>
-                                                    {/* Funded By Logic */}
+                                                    {/* Funded By Logic - Dynamic based on majority funding for this member */}
                                                     <Text style={styles.contributorMeta}>
-                                                        Funded By: {ledgers.find(l => l.id === item.member.id)?.name || item.memberUser.name.split(' ')[0]}
+                                                        {(() => {
+                                                            // Logic: If member has spent money, check if it was mostly self-funded or funded by others
+                                                            const memberTxns = [...approvedSpendings, ...pendingSpendings].filter(s => s.addedBy === item.member.id);
+                                                            if (memberTxns.length === 0) return 'No contributions';
+
+                                                            // Count occurrences of funders
+                                                            const fundingStats = {};
+                                                            memberTxns.forEach(s => {
+                                                                const funder = s.fundedBy || s.addedBy;
+                                                                fundingStats[funder] = (fundingStats[funder] || 0) + 1;
+                                                            });
+
+                                                            // Find dominant funder
+                                                            let maxCount = 0;
+                                                            let dominantFunder = item.member.id;
+                                                            Object.keys(fundingStats).forEach(fId => {
+                                                                if (fundingStats[fId] > maxCount) {
+                                                                    maxCount = fundingStats[fId];
+                                                                    dominantFunder = fId;
+                                                                }
+                                                            });
+
+                                                            if (dominantFunder === item.member.id) return 'Self Funded';
+                                                            return `Funded by ${userAccounts[dominantFunder]?.name || 'Unknown'}`;
+                                                        })()}
                                                     </Text>
                                                 </View>
 
@@ -1509,7 +1633,12 @@ export default function ProjectDetailScreen({ navigation, route }) {
                                                     <MaterialCommunityIcons name="wallet-outline" size={18} color={theme.colors.textSecondary} />
                                                     <Text style={styles.detailInfoText}>
                                                         Funded By: <Text style={{ fontWeight: '600', color: theme.colors.textPrimary }}>
-                                                            {ledgers.find(l => l.id === showSpendingDetail.ledgerId)?.name || 'General'}
+                                                            {(() => {
+                                                                if (!showSpendingDetail.fundedBy || showSpendingDetail.fundedBy === showSpendingDetail.addedBy) {
+                                                                    return userAccounts[showSpendingDetail.addedBy]?.name || 'Self Funded';
+                                                                }
+                                                                return userAccounts[showSpendingDetail.fundedBy]?.name || 'Unknown';
+                                                            })()}
                                                         </Text>
                                                         {showSpendingDetail.subLedger ? ` • ${showSpendingDetail.subLedger}` : ''}
                                                     </Text>
@@ -2248,6 +2377,7 @@ const styles = StyleSheet.create({
         fontWeight: '600',
     },
     amountSection: {
+        marginTop: 16,
         marginBottom: 16,
     },
     descSection: {
@@ -3715,5 +3845,73 @@ const styles = StyleSheet.create({
         height: 1,
         backgroundColor: theme.colors.borderLight,
         marginVertical: 16,
+    },
+    // NEW Styles for Investment Type
+    investmentTypeRow: {
+        flexDirection: 'row',
+        gap: 12,
+        marginBottom: 16,
+    },
+    typeButton: {
+        flex: 1,
+        paddingVertical: 12,
+        backgroundColor: theme.colors.surfaceAlt,
+        borderRadius: 12,
+        alignItems: 'center',
+        borderWidth: 1,
+        borderColor: theme.colors.border,
+    },
+    typeButtonActive: {
+        backgroundColor: theme.colors.primary,
+        borderColor: theme.colors.primary,
+    },
+    typeButtonText: {
+        fontWeight: '600',
+        color: theme.colors.textSecondary,
+        fontSize: 14,
+    },
+    typeButtonTextActive: {
+        color: 'white',
+    },
+    funderList: {
+        flexGrow: 0,
+        marginBottom: 8,
+    },
+    funderChip: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingHorizontal: 12,
+        paddingVertical: 8,
+        backgroundColor: theme.colors.surfaceAlt,
+        borderRadius: 20,
+        marginRight: 8,
+        borderWidth: 1,
+        borderColor: theme.colors.border,
+        gap: 6,
+    },
+    funderChipActive: {
+        backgroundColor: theme.colors.primary,
+        borderColor: theme.colors.primary,
+    },
+    funderAvatarSmall: {
+        width: 20,
+        height: 20,
+        borderRadius: 10,
+        backgroundColor: 'rgba(255,255,255,0.3)',
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    funderAvatarText: {
+        fontSize: 10,
+        fontWeight: 'bold',
+        color: theme.colors.textPrimary,
+    },
+    funderText: {
+        fontSize: 13,
+        color: theme.colors.textSecondary,
+    },
+    funderTextActive: {
+        color: 'white',
+        fontWeight: '600',
     },
 });
