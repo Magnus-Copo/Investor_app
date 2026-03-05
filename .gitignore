@@ -7,6 +7,14 @@ node_modules/
 .expo
 .expo/
 **/.expo/
+.agent/
+**/.agent/
+.gemini/
+**/.gemini/
+.qodo/
+**/.qodo/
+recent_chat_progress.md
+**/recent_chat_progress.md
 dist/
 web-build/
 expo-env.d.ts
